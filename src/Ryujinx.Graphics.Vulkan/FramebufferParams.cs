@@ -250,7 +250,7 @@ namespace Ryujinx.Graphics.Vulkan
                 Layers = Layers,
             };
 
-            api.CreateFramebuffer(_device, framebufferCreateInfo, null, out var framebuffer).ThrowOnError();
+            api.CreateFramebuffer(_device, in framebufferCreateInfo, null, out var framebuffer).ThrowOnError();
             return new Auto<DisposableFramebuffer>(new DisposableFramebuffer(api, _device, framebuffer), null, _attachments);
         }
 
@@ -286,10 +286,44 @@ namespace Ryujinx.Graphics.Vulkan
 
             _depthStencil?.Storage?.QueueLoadOpBarrier(cbs, true);
 
-            gd.Barriers.Flush(cbs.CommandBuffer, false, null);
+            gd.Barriers.Flush(cbs, false, null, null);
         }
 
-        public (Auto<DisposableRenderPass> renderPass, Auto<DisposableFramebuffer> framebuffer) GetPassAndFramebuffer(
+        public void AddStoreOpUsage()
+        {
+            if (_colors != null)
+            {
+                foreach (var color in _colors)
+                {
+                    color.Storage?.AddStoreOpUsage(false);
+                }
+            }
+
+            _depthStencil?.Storage?.AddStoreOpUsage(true);
+        }
+
+        public void ClearBindings()
+        {
+            _depthStencil?.Storage.ClearBindings();
+
+            for (int i = 0; i < _colorsCanonical.Length; i++)
+            {
+                _colorsCanonical[i]?.Storage.ClearBindings();
+            }
+        }
+
+        public void AddBindings()
+        {
+            _depthStencil?.Storage.AddBinding(_depthStencil);
+
+            for (int i = 0; i < _colorsCanonical.Length; i++)
+            {
+                TextureView color = _colorsCanonical[i];
+                color?.Storage.AddBinding(color);
+            }
+        }
+
+        public (RenderPassHolder rpHolder, Auto<DisposableFramebuffer> framebuffer) GetPassAndFramebuffer(
             VulkanRenderer gd,
             Device device,
             CommandBufferScoped cbs)

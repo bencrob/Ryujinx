@@ -1,8 +1,8 @@
 using OpenTK.Graphics.OpenGL;
 using Ryujinx.Common;
+using Ryujinx.Common.Memory;
 using Ryujinx.Graphics.GAL;
 using System;
-using System.Buffers;
 using System.Diagnostics;
 
 namespace Ryujinx.Graphics.OpenGL.Image
@@ -51,7 +51,7 @@ namespace Ryujinx.Graphics.OpenGL.Image
                 pixelInternalFormat = format.PixelInternalFormat;
             }
 
-            int levels = Info.GetLevelsClamped();
+            int levels = Info.Levels;
 
             GL.TextureView(
                 Handle,
@@ -267,7 +267,7 @@ namespace Ryujinx.Graphics.OpenGL.Image
         public unsafe PinnedSpan<byte> GetData()
         {
             int size = 0;
-            int levels = Info.GetLevelsClamped();
+            int levels = Info.Levels;
 
             for (int level = 0; level < levels; level++)
             {
@@ -426,7 +426,7 @@ namespace Ryujinx.Graphics.OpenGL.Image
                 faces = 6;
             }
 
-            int levels = Info.GetLevelsClamped();
+            int levels = Info.Levels;
 
             for (int level = 0; level < levels; level++)
             {
@@ -448,13 +448,13 @@ namespace Ryujinx.Graphics.OpenGL.Image
             }
         }
 
-        public void SetData(IMemoryOwner<byte> data)
+        public void SetData(MemoryOwner<byte> data)
         {
             using (data = EnsureDataFormat(data))
             {
                 unsafe
                 {
-                    var dataSpan = data.Memory.Span;
+                    var dataSpan = data.Span;
                     fixed (byte* ptr = dataSpan)
                     {
                         ReadFrom((IntPtr)ptr, dataSpan.Length);
@@ -463,13 +463,13 @@ namespace Ryujinx.Graphics.OpenGL.Image
             }
         }
 
-        public void SetData(IMemoryOwner<byte> data, int layer, int level)
+        public void SetData(MemoryOwner<byte> data, int layer, int level)
         {
             using (data = EnsureDataFormat(data))
             {
                 unsafe
                 {
-                    fixed (byte* ptr = data.Memory.Span)
+                    fixed (byte* ptr = data.Span)
                     {
                         int width = Math.Max(Info.Width >> level, 1);
                         int height = Math.Max(Info.Height >> level, 1);
@@ -480,7 +480,7 @@ namespace Ryujinx.Graphics.OpenGL.Image
             }
         }
 
-        public void SetData(IMemoryOwner<byte> data, int layer, int level, Rectangle<int> region)
+        public void SetData(MemoryOwner<byte> data, int layer, int level, Rectangle<int> region)
         {
             using (data = EnsureDataFormat(data))
             {
@@ -489,7 +489,7 @@ namespace Ryujinx.Graphics.OpenGL.Image
 
                 unsafe
                 {
-                    fixed (byte* ptr = data.Memory.Span)
+                    fixed (byte* ptr = data.Span)
                     {
                         ReadFrom2D(
                             (IntPtr)ptr,
@@ -522,13 +522,13 @@ namespace Ryujinx.Graphics.OpenGL.Image
             ReadFrom2D(data, layer, level, x, y, width, height, mipSize);
         }
 
-        private IMemoryOwner<byte> EnsureDataFormat(IMemoryOwner<byte> data)
+        private MemoryOwner<byte> EnsureDataFormat(MemoryOwner<byte> data)
         {
             if (Format == Format.S8UintD24Unorm)
             {
                 using (data)
                 {
-                    return FormatConverter.ConvertS8D24ToD24S8(data.Memory.Span);
+                    return FormatConverter.ConvertS8D24ToD24S8(data.Span);
                 }
             }
 
@@ -716,7 +716,7 @@ namespace Ryujinx.Graphics.OpenGL.Image
             int width = Info.Width;
             int height = Info.Height;
             int depth = Info.Depth;
-            int levels = Info.GetLevelsClamped();
+            int levels = Info.Levels;
 
             int offset = 0;
 

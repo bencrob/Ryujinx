@@ -340,7 +340,7 @@ namespace Ryujinx.Graphics.Gpu.Image
             /// <returns>True if any used entries of the pool might have been modified, false otherwise</returns>
             public bool SamplerPoolModified()
             {
-                return SamplerPool.WasModified(ref _samplerPoolSequence);
+                return SamplerPool != null && SamplerPool.WasModified(ref _samplerPoolSequence);
             }
         }
 
@@ -516,12 +516,15 @@ namespace Ryujinx.Graphics.Gpu.Image
                 }
 
                 // Check if any of our cached samplers changed on the pool.
-                foreach ((int samplerId, (Sampler sampler, SamplerDescriptor descriptor)) in SamplerIds)
+                if (SamplerPool != null)
                 {
-                    if (SamplerPool.GetCachedItem(samplerId) != sampler ||
-                        (sampler == null && SamplerPool.IsValidId(samplerId) && !SamplerPool.GetDescriptorRef(samplerId).Equals(descriptor)))
+                    foreach ((int samplerId, (Sampler sampler, SamplerDescriptor descriptor)) in SamplerIds)
                     {
-                        return true;
+                        if (SamplerPool.GetCachedItem(samplerId) != sampler ||
+                            (sampler == null && SamplerPool.IsValidId(samplerId) && !SamplerPool.GetDescriptorRef(samplerId).Equals(descriptor)))
+                        {
+                            return true;
+                        }
                     }
                 }
 
@@ -656,7 +659,6 @@ namespace Ryujinx.Graphics.Gpu.Image
             int length = (isSampler ? samplerPool.MaximumId : texturePool.MaximumId) + 1;
             length = Math.Min(length, bindingInfo.ArrayLength);
 
-            Format[] formats = isImage ? new Format[bindingInfo.ArrayLength] : null;
             ISampler[] samplers = isImage ? null : new ISampler[bindingInfo.ArrayLength];
             ITexture[] textures = new ITexture[bindingInfo.ArrayLength];
 
@@ -671,7 +673,7 @@ namespace Ryujinx.Graphics.Gpu.Image
                 }
                 else
                 {
-                    ref readonly TextureDescriptor descriptor = ref texturePool.GetForBinding(index, out texture);
+                    ref readonly TextureDescriptor descriptor = ref texturePool.GetForBinding(index, bindingInfo.FormatInfo, out texture);
 
                     if (texture != null)
                     {
@@ -694,8 +696,6 @@ namespace Ryujinx.Graphics.Gpu.Image
                 ITexture hostTexture = texture?.GetTargetTexture(bindingInfo.Target);
                 ISampler hostSampler = sampler?.GetHostSampler(texture);
 
-                Format format = bindingInfo.Format;
-
                 if (hostTexture != null && texture.Target == Target.TextureBuffer)
                 {
                     // Ensure that the buffer texture is using the correct buffer as storage.
@@ -703,26 +703,15 @@ namespace Ryujinx.Graphics.Gpu.Image
                     // to ensure we're not using a old buffer that was already deleted.
                     if (isImage)
                     {
-                        if (format == 0 && texture != null)
-                        {
-                            format = texture.Format;
-                        }
-
-                        _channel.BufferManager.SetBufferTextureStorage(stage, entry.ImageArray, hostTexture, texture.Range, bindingInfo, index, format);
+                        _channel.BufferManager.SetBufferTextureStorage(stage, entry.ImageArray, hostTexture, texture.Range, bindingInfo, index);
                     }
                     else
                     {
-                        _channel.BufferManager.SetBufferTextureStorage(stage, entry.TextureArray, hostTexture, texture.Range, bindingInfo, index, format);
+                        _channel.BufferManager.SetBufferTextureStorage(stage, entry.TextureArray, hostTexture, texture.Range, bindingInfo, index);
                     }
                 }
                 else if (isImage)
                 {
-                    if (format == 0 && texture != null)
-                    {
-                        format = texture.Format;
-                    }
-
-                    formats[index] = format;
                     textures[index] = hostTexture;
                 }
                 else
@@ -734,7 +723,6 @@ namespace Ryujinx.Graphics.Gpu.Image
 
             if (isImage)
             {
-                entry.ImageArray.SetFormats(0, formats);
                 entry.ImageArray.SetImages(0, textures);
 
                 SetImageArray(stage, bindingInfo, entry.ImageArray);
@@ -860,7 +848,6 @@ namespace Ryujinx.Graphics.Gpu.Image
 
             entry.UpdateData(cachedTextureBuffer, cachedSamplerBuffer, separateSamplerBuffer);
 
-            Format[] formats = isImage ? new Format[bindingInfo.ArrayLength] : null;
             ISampler[] samplers = isImage ? null : new ISampler[bindingInfo.ArrayLength];
             ITexture[] textures = new ITexture[bindingInfo.ArrayLength];
 
@@ -880,7 +867,7 @@ namespace Ryujinx.Graphics.Gpu.Image
                     samplerId = TextureHandle.UnpackSamplerId(packedId);
                 }
 
-                ref readonly TextureDescriptor descriptor = ref texturePool.GetForBinding(textureId, out Texture texture);
+                ref readonly TextureDescriptor descriptor = ref texturePool.GetForBinding(textureId, bindingInfo.FormatInfo, out Texture texture);
 
                 if (texture != null)
                 {
@@ -899,15 +886,19 @@ namespace Ryujinx.Graphics.Gpu.Image
                     }
                 }
 
-                Sampler sampler = samplerPool?.Get(samplerId);
-
                 entry.TextureIds[textureId] = (texture, descriptor);
-                entry.SamplerIds[samplerId] = (sampler, samplerPool?.GetDescriptorRef(samplerId) ?? default);
 
                 ITexture hostTexture = texture?.GetTargetTexture(bindingInfo.Target);
-                ISampler hostSampler = sampler?.GetHostSampler(texture);
+                ISampler hostSampler = null;
 
-                Format format = bindingInfo.Format;
+                if (!isImage && bindingInfo.Target != Target.TextureBuffer)
+                {
+                    Sampler sampler = samplerPool?.Get(samplerId);
+
+                    entry.SamplerIds[samplerId] = (sampler, samplerPool?.GetDescriptorRef(samplerId) ?? default);
+
+                    hostSampler = sampler?.GetHostSampler(texture);
+                }
 
                 if (hostTexture != null && texture.Target == Target.TextureBuffer)
                 {
@@ -916,26 +907,15 @@ namespace Ryujinx.Graphics.Gpu.Image
                     // to ensure we're not using a old buffer that was already deleted.
                     if (isImage)
                     {
-                        if (format == 0 && texture != null)
-                        {
-                            format = texture.Format;
-                        }
-
-                        _channel.BufferManager.SetBufferTextureStorage(stage, entry.ImageArray, hostTexture, texture.Range, bindingInfo, index, format);
+                        _channel.BufferManager.SetBufferTextureStorage(stage, entry.ImageArray, hostTexture, texture.Range, bindingInfo, index);
                     }
                     else
                     {
-                        _channel.BufferManager.SetBufferTextureStorage(stage, entry.TextureArray, hostTexture, texture.Range, bindingInfo, index, format);
+                        _channel.BufferManager.SetBufferTextureStorage(stage, entry.TextureArray, hostTexture, texture.Range, bindingInfo, index);
                     }
                 }
                 else if (isImage)
                 {
-                    if (format == 0 && texture != null)
-                    {
-                        format = texture.Format;
-                    }
-
-                    formats[index] = format;
                     textures[index] = hostTexture;
                 }
                 else
@@ -947,7 +927,6 @@ namespace Ryujinx.Graphics.Gpu.Image
 
             if (isImage)
             {
-                entry.ImageArray.SetFormats(0, formats);
                 entry.ImageArray.SetImages(0, textures);
 
                 SetImageArray(stage, bindingInfo, entry.ImageArray);

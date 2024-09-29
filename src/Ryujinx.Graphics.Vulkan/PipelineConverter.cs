@@ -9,13 +9,6 @@ namespace Ryujinx.Graphics.Vulkan
 {
     static class PipelineConverter
     {
-        private const AccessFlags SubpassAccessMask =
-            AccessFlags.MemoryReadBit |
-            AccessFlags.MemoryWriteBit |
-            AccessFlags.ShaderReadBit |
-            AccessFlags.ColorAttachmentWriteBit |
-            AccessFlags.DepthStencilAttachmentWriteBit;
-
         public static unsafe DisposableRenderPass ToRenderPass(this ProgramPipelineState state, VulkanRenderer gd, Device device)
         {
             const int MaxAttachments = Constants.MaxRenderTargets + 1;
@@ -108,7 +101,7 @@ namespace Ryujinx.Graphics.Vulkan
                 }
             }
 
-            var subpassDependency = CreateSubpassDependency();
+            var subpassDependency = CreateSubpassDependency(gd);
 
             fixed (AttachmentDescription* pAttachmentDescs = attachmentDescs)
             {
@@ -123,35 +116,39 @@ namespace Ryujinx.Graphics.Vulkan
                     DependencyCount = 1,
                 };
 
-                gd.Api.CreateRenderPass(device, renderPassCreateInfo, null, out var renderPass).ThrowOnError();
+                gd.Api.CreateRenderPass(device, in renderPassCreateInfo, null, out var renderPass).ThrowOnError();
 
                 return new DisposableRenderPass(gd.Api, device, renderPass);
             }
         }
 
-        public static SubpassDependency CreateSubpassDependency()
+        public static SubpassDependency CreateSubpassDependency(VulkanRenderer gd)
         {
+            var (access, stages) = BarrierBatch.GetSubpassAccessSuperset(gd);
+
             return new SubpassDependency(
                 0,
                 0,
-                PipelineStageFlags.AllGraphicsBit,
-                PipelineStageFlags.AllGraphicsBit,
-                SubpassAccessMask,
-                SubpassAccessMask,
+                stages,
+                stages,
+                access,
+                access,
                 0);
         }
 
-        public unsafe static SubpassDependency2 CreateSubpassDependency2()
+        public unsafe static SubpassDependency2 CreateSubpassDependency2(VulkanRenderer gd)
         {
+            var (access, stages) = BarrierBatch.GetSubpassAccessSuperset(gd);
+
             return new SubpassDependency2(
                 StructureType.SubpassDependency2,
                 null,
                 0,
                 0,
-                PipelineStageFlags.AllGraphicsBit,
-                PipelineStageFlags.AllGraphicsBit,
-                SubpassAccessMask,
-                SubpassAccessMask,
+                stages,
+                stages,
+                access,
+                access,
                 0);
         }
 

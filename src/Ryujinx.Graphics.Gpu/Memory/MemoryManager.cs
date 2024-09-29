@@ -1,8 +1,8 @@
 using Ryujinx.Common.Memory;
+using Ryujinx.Graphics.Gpu.Image;
 using Ryujinx.Memory;
 using Ryujinx.Memory.Range;
 using System;
-using System.Buffers;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -65,6 +65,7 @@ namespace Ryujinx.Graphics.Gpu.Memory
             MemoryUnmapped += Physical.BufferCache.MemoryUnmappedHandler;
             MemoryUnmapped += VirtualRangeCache.MemoryUnmappedHandler;
             MemoryUnmapped += CounterCache.MemoryUnmappedHandler;
+            Physical.TextureCache.Initialize();
         }
 
         /// <summary>
@@ -242,9 +243,9 @@ namespace Ryujinx.Graphics.Gpu.Memory
             }
             else
             {
-                IMemoryOwner<byte> memoryOwner = ByteMemoryPool.Rent(size);
+                MemoryOwner<byte> memoryOwner = MemoryOwner<byte>.Rent(size);
 
-                GetSpan(va, size).CopyTo(memoryOwner.Memory.Span);
+                ReadImpl(va, memoryOwner.Span, tracked);
 
                 return new WritableRegion(this, va, memoryOwner, tracked);
             }

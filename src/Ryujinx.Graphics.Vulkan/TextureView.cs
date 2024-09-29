@@ -1,7 +1,7 @@
+using Ryujinx.Common.Memory;
 using Ryujinx.Graphics.GAL;
 using Silk.NET.Vulkan;
 using System;
-using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -22,6 +22,8 @@ namespace Ryujinx.Graphics.Vulkan
         private readonly Auto<DisposableImageView> _imageViewIdentity;
         private readonly Auto<DisposableImageView> _imageView2dArray;
         private Dictionary<Format, TextureView> _selfManagedViews;
+
+        private int _hazardUses;
 
         private readonly TextureCreateInfo _info;
 
@@ -60,7 +62,7 @@ namespace Ryujinx.Graphics.Vulkan
             gd.Textures.Add(this);
 
             var format = _gd.FormatCapabilities.ConvertToVkFormat(info.Format);
-            var usage = TextureStorage.GetImageUsage(info.Format, info.Target, gd.Capabilities.SupportsShaderStorageImageMultisample);
+            var usage = TextureStorage.GetImageUsage(info.Format, info.Target, gd.Capabilities);
             var levels = (uint)info.Levels;
             var layers = (uint)info.GetLayers();
 
@@ -117,7 +119,7 @@ namespace Ryujinx.Graphics.Vulkan
                     PNext = &imageViewUsage,
                 };
 
-                gd.Api.CreateImageView(device, imageCreateInfo, null, out var imageView).ThrowOnError();
+                gd.Api.CreateImageView(device, in imageCreateInfo, null, out var imageView).ThrowOnError();
                 return new Auto<DisposableImageView>(new DisposableImageView(gd.Api, device, imageView), null, storage.GetImage());
             }
 
@@ -492,7 +494,7 @@ namespace Ryujinx.Graphics.Vulkan
                 dstStageMask,
                 DependencyFlags.None,
                 1,
-                memoryBarrier,
+                in memoryBarrier,
                 0,
                 null,
                 0,
@@ -557,7 +559,7 @@ namespace Ryujinx.Graphics.Vulkan
                 0,
                 null,
                 1,
-                memoryBarrier);
+                in memoryBarrier);
         }
 
         public TextureView GetView(Format format)
@@ -667,8 +669,36 @@ namespace Ryujinx.Graphics.Vulkan
 
             if (PrepareOutputBuffer(cbs, hostSize, buffer, out VkBuffer copyToBuffer, out BufferHolder tempCopyHolder))
             {
+                // No barrier necessary, as this is a temporary copy buffer.
                 offset = 0;
             }
+            else
+            {
+                BufferHolder.InsertBufferBarrier(
+                    _gd,
+                    cbs.CommandBuffer,
+                    copyToBuffer,
+                    BufferHolder.DefaultAccessFlags,
+                    AccessFlags.TransferWriteBit,
+                    PipelineStageFlags.AllCommandsBit,
+                    PipelineStageFlags.TransferBit,
+                    offset,
+                    outSize);
+            }
+
+            InsertImageBarrier(
+                _gd.Api,
+                cbs.CommandBuffer,
+                image,
+                TextureStorage.DefaultAccessMask,
+                AccessFlags.TransferReadBit,
+                PipelineStageFlags.AllCommandsBit,
+                PipelineStageFlags.TransferBit,
+                Info.Format.ConvertAspectFlags(),
+                FirstLayer + layer,
+                FirstLevel + level,
+                1,
+                1);
 
             CopyFromOrToBuffer(cbs.CommandBuffer, copyToBuffer, image, hostSize, true, layer, level, 1, 1, singleSlice: true, offset, stride);
 
@@ -676,6 +706,19 @@ namespace Ryujinx.Graphics.Vulkan
             {
                 CopyDataToOutputBuffer(cbs, tempCopyHolder, autoBuffer, hostSize, range.Offset);
                 tempCopyHolder.Dispose();
+            }
+            else
+            {
+                BufferHolder.InsertBufferBarrier(
+                    _gd,
+                    cbs.CommandBuffer,
+                    copyToBuffer,
+                    AccessFlags.TransferWriteBit,
+                    BufferHolder.DefaultAccessFlags,
+                    PipelineStageFlags.TransferBit,
+                    PipelineStageFlags.AllCommandsBit,
+                    offset,
+                    outSize);
             }
         }
 
@@ -703,23 +746,23 @@ namespace Ryujinx.Graphics.Vulkan
         }
 
         /// <inheritdoc/>
-        public void SetData(IMemoryOwner<byte> data)
+        public void SetData(MemoryOwner<byte> data)
         {
-            SetData(data.Memory.Span, 0, 0, Info.GetLayers(), Info.Levels, singleSlice: false);
+            SetData(data.Span, 0, 0, Info.GetLayers(), Info.Levels, singleSlice: false);
             data.Dispose();
         }
 
         /// <inheritdoc/>
-        public void SetData(IMemoryOwner<byte> data, int layer, int level)
+        public void SetData(MemoryOwner<byte> data, int layer, int level)
         {
-            SetData(data.Memory.Span, layer, level, 1, 1, singleSlice: true);
+            SetData(data.Span, layer, level, 1, 1, singleSlice: true);
             data.Dispose();
         }
 
         /// <inheritdoc/>
-        public void SetData(IMemoryOwner<byte> data, int layer, int level, Rectangle<int> region)
+        public void SetData(MemoryOwner<byte> data, int layer, int level, Rectangle<int> region)
         {
-            SetData(data.Memory.Span, layer, level, 1, 1, singleSlice: true, region);
+            SetData(data.Span, layer, level, 1, 1, singleSlice: true, region);
             data.Dispose();
         }
 
@@ -908,11 +951,11 @@ namespace Ryujinx.Graphics.Vulkan
 
                 if (to)
                 {
-                    _gd.Api.CmdCopyImageToBuffer(commandBuffer, image, ImageLayout.General, buffer, 1, region);
+                    _gd.Api.CmdCopyImageToBuffer(commandBuffer, image, ImageLayout.General, buffer, 1, in region);
                 }
                 else
                 {
-                    _gd.Api.CmdCopyBufferToImage(commandBuffer, buffer, image, ImageLayout.General, 1, region);
+                    _gd.Api.CmdCopyBufferToImage(commandBuffer, buffer, image, ImageLayout.General, 1, in region);
                 }
 
                 offset += mipSize;
@@ -969,11 +1012,11 @@ namespace Ryujinx.Graphics.Vulkan
 
             if (to)
             {
-                _gd.Api.CmdCopyImageToBuffer(commandBuffer, image, ImageLayout.General, buffer, 1, region);
+                _gd.Api.CmdCopyImageToBuffer(commandBuffer, image, ImageLayout.General, buffer, 1, in region);
             }
             else
             {
-                _gd.Api.CmdCopyBufferToImage(commandBuffer, buffer, image, ImageLayout.General, 1, region);
+                _gd.Api.CmdCopyBufferToImage(commandBuffer, buffer, image, ImageLayout.General, 1, in region);
             }
         }
 
@@ -993,7 +1036,35 @@ namespace Ryujinx.Graphics.Vulkan
             throw new NotImplementedException();
         }
 
-        public (Auto<DisposableRenderPass> renderPass, Auto<DisposableFramebuffer> framebuffer) GetPassAndFramebuffer(
+        public void PrepareForUsage(CommandBufferScoped cbs, PipelineStageFlags flags, List<TextureView> feedbackLoopHazards)
+        {
+            Storage.QueueWriteToReadBarrier(cbs, AccessFlags.ShaderReadBit, flags);
+
+            if (feedbackLoopHazards != null && Storage.IsBound(this))
+            {
+                feedbackLoopHazards.Add(this);
+                _hazardUses++;
+            }
+        }
+
+        public void ClearUsage(List<TextureView> feedbackLoopHazards)
+        {
+            if (_hazardUses != 0 && feedbackLoopHazards != null)
+            {
+                feedbackLoopHazards.Remove(this);
+                _hazardUses--;
+            }
+        }
+
+        public void DecrementHazardUses()
+        {
+            if (_hazardUses != 0)
+            {
+                _hazardUses--;
+            }
+        }
+
+        public (RenderPassHolder rpHolder, Auto<DisposableFramebuffer> framebuffer) GetPassAndFramebuffer(
             VulkanRenderer gd,
             Device device,
             CommandBufferScoped cbs,
@@ -1006,7 +1077,7 @@ namespace Ryujinx.Graphics.Vulkan
                 rpHolder = new RenderPassHolder(gd, device, key, fb);
             }
 
-            return (rpHolder.GetRenderPass(), rpHolder.GetFramebuffer(gd, cbs, fb));
+            return (rpHolder, rpHolder.GetFramebuffer(gd, cbs, fb));
         }
 
         public void AddRenderPass(RenderPassCacheKey key, RenderPassHolder renderPass)

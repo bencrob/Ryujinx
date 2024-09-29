@@ -69,6 +69,14 @@ namespace Ryujinx.Graphics.Gpu.Image
         }
 
         /// <summary>
+        /// Initializes the cache, setting the maximum texture capacity for the specified GPU context.
+        /// </summary>
+        public void Initialize()
+        {
+            _cache.Initialize(_context);
+        }
+
+        /// <summary>
         /// Handles marking of textures written to a memory region being (partially) remapped.
         /// </summary>
         /// <param name="sender">Sender object</param>
@@ -351,6 +359,53 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// Tries to find an existing texture, or create a new one if not found.
         /// </summary>
         /// <param name="memoryManager">GPU memory manager where the texture is mapped</param>
+        /// <param name="formatInfo">Format of the texture</param>
+        /// <param name="gpuAddress">GPU virtual address of the texture</param>
+        /// <param name="xCount">Texture width in bytes</param>
+        /// <param name="yCount">Texture height</param>
+        /// <param name="stride">Texture stride if linear, otherwise ignored</param>
+        /// <param name="isLinear">Indicates if the texture is linear or block linear</param>
+        /// <param name="gobBlocksInY">GOB blocks in Y for block linear textures</param>
+        /// <param name="gobBlocksInZ">GOB blocks in Z for 3D block linear textures</param>
+        /// <returns>The texture</returns>
+        public Texture FindOrCreateTexture(
+            MemoryManager memoryManager,
+            FormatInfo formatInfo,
+            ulong gpuAddress,
+            int xCount,
+            int yCount,
+            int stride,
+            bool isLinear,
+            int gobBlocksInY,
+            int gobBlocksInZ)
+        {
+            TextureInfo info = new(
+                gpuAddress,
+                xCount / formatInfo.BytesPerPixel,
+                yCount,
+                1,
+                1,
+                1,
+                1,
+                stride,
+                isLinear,
+                gobBlocksInY,
+                gobBlocksInZ,
+                1,
+                Target.Texture2D,
+                formatInfo);
+
+            Texture texture = FindOrCreateTexture(memoryManager, TextureSearchFlags.ForCopy, info, 0, sizeHint: new Size(xCount, yCount, 1));
+
+            texture?.SynchronizeMemory();
+
+            return texture;
+        }
+
+        /// <summary>
+        /// Tries to find an existing texture, or create a new one if not found.
+        /// </summary>
+        /// <param name="memoryManager">GPU memory manager where the texture is mapped</param>
         /// <param name="colorState">Color buffer texture to find or create</param>
         /// <param name="layered">Indicates if the texture might be accessed with a non-zero layer index</param>
         /// <param name="discard">Indicates that the sizeHint region's data will be overwritten</param>
@@ -468,13 +523,11 @@ namespace Ryujinx.Graphics.Gpu.Image
             int gobBlocksInY = dsState.MemoryLayout.UnpackGobBlocksInY();
             int gobBlocksInZ = dsState.MemoryLayout.UnpackGobBlocksInZ();
 
+            layered &= size.UnpackIsLayered();
+
             Target target;
 
-            if (dsState.MemoryLayout.UnpackIsTarget3D())
-            {
-                target = Target.Texture3D;
-            }
-            else if ((samplesInX | samplesInY) != 1)
+            if ((samplesInX | samplesInY) != 1)
             {
                 target = size.Depth > 1 && layered
                     ? Target.Texture2DMultisampleArray
